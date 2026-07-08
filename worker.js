@@ -76,14 +76,26 @@ async function handleDQD(path, corsHdrs) {
     let articles = [];
     if (stateJson) {
       let rawList = null;
-      if (stateJson.articleList && Array.isArray(stateJson.articleList)) rawList = stateJson.articleList;
+      // Check newsListStore.newsList first (current DQD home/104 format)
+      if (stateJson.newsListStore && stateJson.newsListStore.newsList && Array.isArray(stateJson.newsListStore.newsList)) {
+        rawList = stateJson.newsListStore.newsList.filter(function(item) { return item.id && item.title; });
+      }
+      else if (stateJson.articleList && Array.isArray(stateJson.articleList)) rawList = stateJson.articleList;
       else if (stateJson.data && stateJson.data.articleList) rawList = stateJson.data.articleList;
       else if (stateJson.data && stateJson.data.articles) rawList = stateJson.data.articles;
       else if (stateJson.articles && Array.isArray(stateJson.articles)) rawList = stateJson.articles;
       else {
+        // Deep scan: check nested objects for article arrays
         for (const k of Object.keys(stateJson)) {
           const v = stateJson[k];
           if (Array.isArray(v) && v.length > 5 && v[0] && v[0].id && v[0].title) { rawList = v; break; }
+          if (v && typeof v === 'object' && !Array.isArray(v)) {
+            for (const k2 of Object.keys(v)) {
+              const v2 = v[k2];
+              if (Array.isArray(v2) && v2.length > 5 && v2.filter(function(x){return x.id && x.title;}).length > 3) { rawList = v2.filter(function(x){return x.id && x.title;}); break; }
+            }
+            if (rawList) break;
+          }
         }
       }
       if (rawList) {
