@@ -1,3 +1,7 @@
 name = "football-brief2"
 main = "worker.js"
 compatibility_date = "2025-01-01"
+
+[[kv_namespaces]]
+binding = "READ_KV"
+id = "5405645b8b5649969413162291c2d5ef"
