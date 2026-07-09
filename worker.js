@@ -89,17 +89,57 @@ async function handleDQD(path, corsHdrs) {
   if (subPath.startsWith('/hot_comment/')) {
     const articleId = subPath.split('/')[2];
     if (!articleId || !/^\d+$/.test(articleId)) return jsonResp({ error: 'invalid id' }, 0);
-    const resp = await fetch('https://m.dongqiudi.com/api/v2/article/' + articleId + '/hot_comment', {
-      headers: { 'User-Agent': UA, 'Accept': 'application/json' },
-    });
-    const data = await resp.json();
+    // Fetch from both endpoints: /hot_comment (top 3 editorial picks) + /comment (community top by likes)
+    const [hotResp, commentResp] = await Promise.all([
+      fetch('https://m.dongqiudi.com/api/v2/article/' + articleId + '/hot_comment', {
+        headers: { 'User-Agent': UA, 'Accept': 'application/json' },
+      }).catch(() => null),
+      fetch('https://m.dongqiudi.com/api/v2/article/' + articleId + '/comment', {
+        headers: { 'User-Agent': UA, 'Accept': 'application/json' },
+      }).catch(() => null),
+    ]);
     const uMap = {};
-    (data.data?.user_list || []).forEach(u => { uMap[String(u.id)] = u.username || '匿名'; });
-    const hotComments = (data.data?.comment_list || []).slice(0, 10).map(c => ({
-      user: uMap[String(c.user_id)] || '匿名',
-      content: (c.content || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim(),
-      likes: String(c.up || '0'),
-    }));
+    const seenIds = new Set();
+    const hotComments = [];
+
+    // 1) Hot comments from editorial /hot_comment endpoint (highest quality)
+    if (hotResp && hotResp.ok) {
+      try {
+        const hd = await hotResp.json();
+        (hd.data?.user_list || []).forEach(u => { uMap[String(u.id)] = u.username || '匿名'; });
+        for (const c of (hd.data?.comment_list || [])) {
+          if (seenIds.has(String(c.id))) continue;
+          seenIds.add(String(c.id));
+          hotComments.push({
+            user: uMap[String(c.user_id)] || '匿名',
+            content: (c.content || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim(),
+            likes: String(c.up || '0'),
+          });
+          if (hotComments.length >= 10) break;
+        }
+      } catch(e) {}
+    }
+
+    // 2) Supplement from /comment endpoint sorted by likes (community favorites)
+    if (hotComments.length < 10 && commentResp && commentResp.ok) {
+      try {
+        const cd = await commentResp.json();
+        (cd.data?.user_list || []).forEach(u => { uMap[String(u.id)] = u.username || '匿名'; });
+        const sorted = (cd.data?.comment_list || [])
+          .filter(c => !seenIds.has(String(c.id)))
+          .sort((a, b) => (b.up || 0) - (a.up || 0));
+        for (const c of sorted) {
+          if (hotComments.length >= 10) break;
+          seenIds.add(String(c.id));
+          hotComments.push({
+            user: uMap[String(c.user_id)] || '匿名',
+            content: (c.content || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim(),
+            likes: String(c.up || '0'),
+          });
+        }
+      } catch(e) {}
+    }
+
     return jsonResp({ hotComments }, 600);
   }
 
