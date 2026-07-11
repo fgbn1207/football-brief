@@ -154,45 +154,58 @@ async function handleDQD(path, corsHdrs) {
       }).catch(() => null),
     ]);
     const uMap = {};
-    const seenIds = new Set();
-    const hotComments = [];
+    const allComments = [];
 
-    // 1) Hot comments from editorial /hot_comment endpoint (highest quality)
+    // 1) Collect from editorial /hot_comment endpoint
     if (hotResp && hotResp.ok) {
       try {
         const hd = await hotResp.json();
         (hd.data?.user_list || []).forEach(u => { uMap[String(u.id)] = u.username || '匿名'; });
         for (const c of (hd.data?.comment_list || [])) {
-          if (seenIds.has(String(c.id))) continue;
-          seenIds.add(String(c.id));
-          hotComments.push({
+          allComments.push({
+            id: String(c.id),
             user: uMap[String(c.user_id)] || '匿名',
             content: (c.content || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim(),
-            likes: String(c.up || '0'),
+            likes: c.up || 0,
           });
-          if (hotComments.length >= 10) break;
         }
       } catch(e) {}
     }
 
-    // 2) Supplement from /comment endpoint sorted by likes (community favorites)
-    if (hotComments.length < 10 && commentResp && commentResp.ok) {
+    // 2) Collect from /comment endpoint
+    if (commentResp && commentResp.ok) {
       try {
         const cd = await commentResp.json();
         (cd.data?.user_list || []).forEach(u => { uMap[String(u.id)] = u.username || '匿名'; });
-        const sorted = (cd.data?.comment_list || [])
-          .filter(c => !seenIds.has(String(c.id)))
-          .sort((a, b) => (b.up || 0) - (a.up || 0));
-        for (const c of sorted) {
-          if (hotComments.length >= 10) break;
-          seenIds.add(String(c.id));
-          hotComments.push({
+        for (const c of (cd.data?.comment_list || [])) {
+          allComments.push({
+            id: String(c.id),
             user: uMap[String(c.user_id)] || '匿名',
             content: (c.content || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim(),
-            likes: String(c.up || '0'),
+            likes: c.up || 0,
           });
         }
       } catch(e) {}
+    }
+
+    // 3) Deduplicate, sort by likes descending, take top 10
+    const seenIds = new Set();
+    const hotComments = [];
+    const sorted = allComments
+      .filter(c => {
+        if (seenIds.has(c.id)) return false;
+        seenIds.add(c.id);
+        return true;
+      })
+      .sort((a, b) => b.likes - a.likes)
+      .slice(0, 10);
+    
+    for (const c of sorted) {
+      hotComments.push({
+        user: c.user,
+        content: c.content,
+        likes: String(c.likes),
+      });
     }
 
     return jsonResp({ hotComments }, 600);
