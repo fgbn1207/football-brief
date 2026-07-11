@@ -144,24 +144,19 @@ async function handleDQD(path, corsHdrs) {
   if (subPath.startsWith('/hot_comment/')) {
     const articleId = subPath.split('/')[2];
     if (!articleId || !/^\d+$/.test(articleId)) return jsonResp({ error: 'invalid id' }, 0);
-    // Fetch from both endpoints: /hot_comment (top 3 editorial picks) + /comment (community top by likes)
-    const [hotResp, commentResp] = await Promise.all([
-      fetch('https://m.dongqiudi.com/api/v2/article/' + articleId + '/hot_comment', {
-        headers: { 'User-Agent': UA, 'Accept': 'application/json' },
-      }).catch(() => null),
-      fetch('https://m.dongqiudi.com/api/v2/article/' + articleId + '/comment', {
-        headers: { 'User-Agent': UA, 'Accept': 'application/json' },
-      }).catch(() => null),
-    ]);
+    // v20: Fetch from both endpoints, multiple pages each, then merge+dedup+sort
     const uMap = {};
     const allComments = [];
 
-    // 1) Collect from editorial /hot_comment endpoint
-    if (hotResp && hotResp.ok) {
+    async function fetchCommentPage(url) {
+      const resp = await fetch(url, {
+        headers: { 'User-Agent': UA, 'Accept': 'application/json' },
+      }).catch(() => null);
+      if (!resp || !resp.ok) return;
       try {
-        const hd = await hotResp.json();
-        (hd.data?.user_list || []).forEach(u => { uMap[String(u.id)] = u.username || '匿名'; });
-        for (const c of (hd.data?.comment_list || [])) {
+        const d = await resp.json();
+        (d.data?.user_list || []).forEach(u => { uMap[String(u.id)] = u.username || '匿名'; });
+        for (const c of (d.data?.comment_list || [])) {
           allComments.push({
             id: String(c.id),
             user: uMap[String(c.user_id)] || '匿名',
@@ -172,21 +167,14 @@ async function handleDQD(path, corsHdrs) {
       } catch(e) {}
     }
 
-    // 2) Collect from /comment endpoint
-    if (commentResp && commentResp.ok) {
-      try {
-        const cd = await commentResp.json();
-        (cd.data?.user_list || []).forEach(u => { uMap[String(u.id)] = u.username || '匿名'; });
-        for (const c of (cd.data?.comment_list || [])) {
-          allComments.push({
-            id: String(c.id),
-            user: uMap[String(c.user_id)] || '匿名',
-            content: (c.content || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim(),
-            likes: c.up || 0,
-          });
-        }
-      } catch(e) {}
-    }
+    // Fetch pages 1-2 from both endpoints
+    const baseUrl = 'https://m.dongqiudi.com/api/v2/article/' + articleId;
+    await Promise.all([
+      fetchCommentPage(baseUrl + '/hot_comment?page=1&page_size=20'),
+      fetchCommentPage(baseUrl + '/hot_comment?page=2&page_size=20'),
+      fetchCommentPage(baseUrl + '/comment?page=1&page_size=20'),
+      fetchCommentPage(baseUrl + '/comment?page=2&page_size=20'),
+    ]);
 
     // 3) Deduplicate, sort by likes descending, take top 10
     const seenIds = new Set();
