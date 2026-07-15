@@ -25,7 +25,7 @@ export default {
         });
       }
       if (path.startsWith('/api/dqd/')) {
-        return await handleDQD(path, corsHdrs);
+        return await handleDQD(path, corsHdrs, env);
       }
       if (path === '/health') {
         return new Response(JSON.stringify({ status: 'ok', timestamp: Date.now() }), {
@@ -59,7 +59,7 @@ export default {
   },
 };
 
-async function handleDQD(path, corsHdrs) {
+async function handleDQD(path, corsHdrs, env) {
   const subPath = path.replace('/api/dqd', '');
   const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1';
   const jsonResp = (data, maxAge = 300) => new Response(JSON.stringify(data), {
@@ -125,6 +125,23 @@ async function handleDQD(path, corsHdrs) {
             }
           }
         }
+      } catch(e) {}
+    }
+
+    // If both sources failed, try KV cache as last resort
+    if (articles.length === 0 && env && env.READ_KV) {
+      try {
+        const cached = await env.READ_KV.get('dqd_articles_cache', 'json');
+        if (cached && cached.length > 0) {
+          articles = cached;
+        }
+      } catch(e) {}
+    }
+
+    // Cache successful result in KV for future fallback
+    if (articles.length > 0 && env && env.READ_KV) {
+      try {
+        await env.READ_KV.put('dqd_articles_cache', JSON.stringify(articles), { expirationTtl: 86400 });
       } catch(e) {}
     }
 
@@ -324,13 +341,13 @@ async function handleSyncClear(request, env, corsHdrs) {
 // === v23: Player News Handlers ===
 var DEFAULT_PLAYERS = [
   {id: "9932", name: "姆巴佩", full_name: "基利安·姆巴佩", team: "皇家马德里"},
-  {id: "9153", name: "梅西", full_name: "里奥·梅西", team: "迈阿密国际"},
-  {id: "9088", name: "C罗", full_name: "克里斯蒂亚诺·罗纳尔多", team: "利雅得胜利"},
-  {id: "9316", name: "哈兰德", full_name: "埃尔林·哈兰德", team: "曼城"},
-  {id: "9489", name: "维尼修斯", full_name: "维尼修斯·儒尼奥尔", team: "皇家马德里"},
-  {id: "9553", name: "贝林厄姆", full_name: "裘德·贝林厄姆", team: "皇家马德里"},
-  {id: "9234", name: "内马尔", full_name: "内马尔·达·席尔瓦", team: "利雅得新月"},
-  {id: "9871", name: "亚马尔", full_name: "拉明·亚马尔", team: "巴塞罗那"}
+  {id: "", name: "梅西", full_name: "里奥·梅西", team: "迈阿密国际"},
+  {id: "", name: "C罗", full_name: "克里斯蒂亚诺·罗纳尔多", team: "利雅得胜利"},
+  {id: "", name: "哈兰德", full_name: "埃尔林·哈兰德", team: "曼城"},
+  {id: "", name: "维尼修斯", full_name: "维尼修斯·儒尼奥尔", team: "皇家马德里"},
+  {id: "", name: "贝林厄姆", full_name: "裘德·贝林厄姆", team: "皇家马德里"},
+  {id: "", name: "内马尔", full_name: "内马尔·达·席尔瓦", team: "利雅得新月"},
+  {id: "", name: "亚马尔", full_name: "拉明·亚马尔", team: "巴塞罗那"}
 ];
 
 async function handlePlayerList(request, env, corsHdrs) {
@@ -388,9 +405,9 @@ async function handlePlayerNews(request, corsHdrs) {
       + '&label=' + encodeURIComponent(playerName)
       + '&word=' + encodeURIComponent(playerName)
       + '&_section=news&category=football';
-    if (playerId) newsUrl += '&player_id=' + encodeURIComponent(playerId);
+    // v28: Don't pass player_id to API - it's unreliable and most IDs are wrong
+    // Only use label/word (player name) for search, which works reliably
     if (playerFullName) newsUrl += '&player_name=' + encodeURIComponent(playerFullName);
-    if (playerId) newsUrl += '&id_type=player';
     newsUrl += '&os=android';
 
     var newsResp = await fetch(newsUrl, { headers: { 'User-Agent': UA, 'Accept': 'application/json' } });
